@@ -12,10 +12,16 @@ mkdir -p dist-standalone
 echo "  → Copying standalone server..."
 cp -r .next/standalone/* dist-standalone/
 
-# Copy static files
+# Copy static files and ensure .next directory structure
 echo "  → Copying static assets..."
+mkdir -p dist-standalone/.next
 cp -r .next/static dist-standalone/.next/
-cp -r public dist-standalone/
+cp -r .next/standalone/.next/* dist-standalone/.next/ 2>/dev/null || true
+
+# Copy public folder
+if [ -d "public" ]; then
+  cp -r public dist-standalone/
+fi
 
 # Create startup script
 echo "  → Creating startup script..."
