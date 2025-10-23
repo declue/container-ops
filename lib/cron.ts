@@ -283,20 +283,59 @@ async function collectMetrics() {
     await ensureSysConf();
     const version = await detectCgroupVersion();
 
+    // Get memory read mode from settings
+    const { getAdminSettings } = await import("./admin-settings");
+    const settings = await getAdminSettings();
+    const memoryReadMode = settings.collection.memoryReadMode || 'auto';
+
     // Memory
     let memLimit = 0;
     let memUsage = 0;
-    if (version === "v2") {
-      memLimit = await readNumber("/sys/fs/cgroup/memory.max");
-      memUsage = await readNumber("/sys/fs/cgroup/memory.current");
-      if (memLimit <= 0 || memLimit === Number.MAX_SAFE_INTEGER) {
-        const meminfo = await fs.readFile("/proc/meminfo", "utf8");
-        const matched = /MemTotal:\s+(\d+)/.exec(meminfo);
-        memLimit = matched ? parseInt(matched[1]) * 1024 : 0;
+    let useProcfs = false;
+
+    // Decide which method to use
+    if (memoryReadMode === 'procfs') {
+      useProcfs = true;
+    } else if (memoryReadMode === 'cgroup') {
+      useProcfs = false;
+    } else { // 'auto'
+      // Try cgroup first, fallback to procfs if not available
+      if (version === "v2") {
+        const testLimit = await readNumber("/sys/fs/cgroup/memory.max");
+        useProcfs = (testLimit <= 0 || testLimit === Number.MAX_SAFE_INTEGER || testLimit > 1e15);
+      } else {
+        const testLimit = await readNumber("/sys/fs/cgroup/memory/memory.limit_in_bytes");
+        useProcfs = (testLimit <= 0 || testLimit > 1e15);
+      }
+    }
+
+    if (useProcfs) {
+      // Read from /proc/meminfo (for VMs and bare metal)
+      const meminfo = await fs.readFile("/proc/meminfo", "utf8");
+      const totalMatch = /MemTotal:\s+(\d+)/.exec(meminfo);
+      const availMatch = /MemAvailable:\s+(\d+)/.exec(meminfo);
+
+      if (totalMatch) {
+        memLimit = parseInt(totalMatch[1]) * 1024; // Convert KB to bytes
+      }
+      if (availMatch) {
+        const memAvailable = parseInt(availMatch[1]) * 1024;
+        memUsage = memLimit - memAvailable;
       }
     } else {
-      memLimit = await readNumber("/sys/fs/cgroup/memory/memory.limit_in_bytes");
-      memUsage = await readNumber("/sys/fs/cgroup/memory/memory.usage_in_bytes");
+      // Read from cgroup (for containers)
+      if (version === "v2") {
+        memLimit = await readNumber("/sys/fs/cgroup/memory.max");
+        memUsage = await readNumber("/sys/fs/cgroup/memory.current");
+        if (memLimit <= 0 || memLimit === Number.MAX_SAFE_INTEGER) {
+          const meminfo = await fs.readFile("/proc/meminfo", "utf8");
+          const matched = /MemTotal:\s+(\d+)/.exec(meminfo);
+          memLimit = matched ? parseInt(matched[1]) * 1024 : 0;
+        }
+      } else {
+        memLimit = await readNumber("/sys/fs/cgroup/memory/memory.limit_in_bytes");
+        memUsage = await readNumber("/sys/fs/cgroup/memory/memory.usage_in_bytes");
+      }
     }
     const memPercent = memLimit > 0 ? (memUsage / memLimit) * 100 : 0;
 

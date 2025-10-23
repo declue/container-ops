@@ -14,6 +14,7 @@ interface VisibilitySettings {
 
 interface CollectionSettings {
   intervalSeconds: number;
+  memoryReadMode?: 'auto' | 'cgroup' | 'procfs';
 }
 
 interface LogFileConfig {
@@ -190,6 +191,10 @@ export default function AdminPage() {
         }
         if (!data.webhooks) {
           data.webhooks = { configs: [] };
+        }
+        // Ensure collection settings has memoryReadMode
+        if (data.collection && !data.collection.memoryReadMode) {
+          data.collection.memoryReadMode = 'auto';
         }
         setSettings(data);
       }
@@ -507,13 +512,42 @@ export default function AdminPage() {
                 onChange={(e) =>
                   setSettings({
                     ...settings,
-                    collection: { intervalSeconds: parseInt(e.target.value) || 5 },
+                    collection: {
+                      ...settings.collection,
+                      intervalSeconds: parseInt(e.target.value) || 5
+                    },
                   })
                 }
                 className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
               <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
                 Current: Every {settings.collection.intervalSeconds} seconds
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Memory Read Mode
+              </label>
+              <select
+                value={settings.collection.memoryReadMode || 'auto'}
+                onChange={(e) =>
+                  setSettings({
+                    ...settings,
+                    collection: {
+                      ...settings.collection,
+                      memoryReadMode: e.target.value as 'auto' | 'cgroup' | 'procfs'
+                    },
+                  })
+                }
+                className="w-full px-4 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="auto">Auto (Detect automatically)</option>
+                <option value="cgroup">cgroup (For containers)</option>
+                <option value="procfs">/proc/meminfo (For VMs and bare metal)</option>
+              </select>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                Choose how to read memory usage. Use "procfs" mode for VMs and bare metal servers. Use "cgroup" for containers.
               </p>
             </div>
           </div>

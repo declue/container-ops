@@ -15,6 +15,7 @@ export interface VisibilitySettings {
 
 export interface CollectionSettings {
   intervalSeconds: number; // Cron interval in seconds
+  memoryReadMode: 'auto' | 'cgroup' | 'procfs'; // How to read memory usage
 }
 
 export interface LogFileConfig {
@@ -69,6 +70,7 @@ const DEFAULT_SETTINGS: AdminSettings = {
   },
   collection: {
     intervalSeconds: 5,
+    memoryReadMode: 'auto',
   },
   logs: {
     files: [],
