@@ -431,7 +431,7 @@ async function checkThresholds(cpu: number, memory: number, storage: number): Pr
 
     const settings = await getAdminSettings();
 
-    if (!settings.thresholds.enabled) {
+    if (!settings.thresholds || !settings.thresholds.enabled) {
       return;
     }
 
