@@ -436,15 +436,16 @@ export default function AdminPage() {
         </div>
       </div>
 
-      <div className="mx-auto max-w-7xl px-4 py-8 space-y-16">
+      <div className="mx-auto max-w-7xl px-4 py-8">
         {saveMessage && (
-          <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 px-4 py-3 rounded-lg">
+          <div className="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 px-4 py-3 rounded-lg mb-8">
             {saveMessage}
           </div>
         )}
 
+        <div className="grid grid-cols-1 gap-8">
         {/* Visibility Settings */}
-        <section className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden mb-8">
+        <section className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden">
           <div className="bg-gradient-to-r from-emerald-50 to-cyan-50 dark:from-emerald-950/30 dark:to-cyan-950/30 px-8 py-5 border-b border-emerald-100/50 dark:border-emerald-900/50">
             <div className="flex items-center gap-3">
               <Eye className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
@@ -484,7 +485,7 @@ export default function AdminPage() {
         </section>
 
         {/* Collection Settings */}
-        <section className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden mb-8">
+        <section className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden">
           <div className="bg-gradient-to-r from-sky-50 to-blue-50 dark:from-sky-950/30 dark:to-blue-950/30 px-8 py-5 border-b border-sky-100/50 dark:border-sky-900/50">
             <div className="flex items-center gap-3">
               <Clock className="h-5 w-5 text-sky-600 dark:text-sky-400" />
@@ -520,7 +521,7 @@ export default function AdminPage() {
         </section>
 
         {/* Log Files Settings */}
-        <section className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden mb-8">
+        <section className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden">
           <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30 px-8 py-5 border-b border-amber-100/50 dark:border-amber-900/50">
             <div className="flex items-center gap-3">
               <FileText className="h-5 w-5 text-amber-600 dark:text-amber-400" />
@@ -640,7 +641,7 @@ export default function AdminPage() {
         </section>
 
         {/* Threshold Settings */}
-        <section className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden mb-8">
+        <section className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden">
           <div className="bg-gradient-to-r from-orange-50 to-red-50 dark:from-orange-950/30 dark:to-red-950/30 px-8 py-5 border-b border-orange-100/50 dark:border-orange-900/50">
             <div className="flex items-center gap-3">
               <AlertTriangle className="h-5 w-5 text-orange-600 dark:text-orange-400" />
@@ -733,7 +734,7 @@ export default function AdminPage() {
         </section>
 
         {/* Webhook Settings */}
-        <section className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden mb-8">
+        <section className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden">
           <div className="bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-950/30 dark:to-purple-950/30 px-8 py-5 border-b border-indigo-100/50 dark:border-indigo-900/50">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -950,7 +951,7 @@ export default function AdminPage() {
         </section>
 
         {/* Metrics Information */}
-        <section className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden mb-8">
+        <section className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden">
           <div className="bg-gradient-to-r from-violet-50 to-purple-50 dark:from-violet-950/30 dark:to-purple-950/30 px-8 py-5 border-b border-violet-100/50 dark:border-violet-900/50">
             <div className="flex items-center gap-3">
               <Database className="h-5 w-5 text-violet-600 dark:text-violet-400" />
@@ -1020,9 +1021,10 @@ export default function AdminPage() {
           </div>
           </div>
         </section>
+        </div>
 
         {/* Actions */}
-        <div className="flex gap-4">
+        <div className="flex gap-4 mt-8">
           <button
             onClick={handleSaveSettings}
             className="flex items-center gap-2 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 dark:bg-emerald-600 dark:hover:bg-emerald-700 text-white font-medium rounded-lg transition-all shadow-sm hover:shadow-md active:scale-[0.98]"
