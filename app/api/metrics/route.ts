@@ -1,5 +1,5 @@
 // app/api/metrics/route.ts
-import { redis } from "@/lib/redis";
+import { redis, ensureRedisConnection } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
 
@@ -22,7 +22,7 @@ async function listMetricKeys(pattern: string, limit: number): Promise<string[]>
     try {
       if (typeof r.scan === "function") {
         try {
-          const res = await r.scan(cursor, { MATCH: pattern, COUNT: 1000 } as any);
+          const res: any = await r.scan(cursor, { MATCH: pattern, COUNT: 1000 } as any);
           const arr = Array.isArray(res) ? res : [res?.cursor, res?.keys];
           cursor = String(arr[0] ?? "0");
           const keys = arr[1] ?? [];
@@ -35,7 +35,7 @@ async function listMetricKeys(pattern: string, limit: number): Promise<string[]>
           if (cursor === "0") break;
           continue;
         } catch {
-          const res = await r.scan(cursor, "MATCH", pattern, "COUNT", 1000);
+          const res: any = await r.scan(cursor, "MATCH", pattern, "COUNT", 1000);
           const arr = res as [string, string[]];
           cursor = String(arr?.[0] ?? "0");
           const keys = arr?.[1] ?? [];
@@ -78,6 +78,8 @@ async function mgetCompat(keys: string[]): Promise<(string | null)[]> {
 
 export async function GET(req: Request) {
   try {
+    await ensureRedisConnection();
+
     const url = new URL(req.url);
     const limit = Math.max(1, Math.min(parseInt(url.searchParams.get("limit") || "") || DEFAULT_LIMIT, 2000));
     const since = parseInt(url.searchParams.get("since") || "") || 0;

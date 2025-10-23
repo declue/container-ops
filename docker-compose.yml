@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: container-ops-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: container-ops-app
+    ports:
+      - "3000:3000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - PROC_MODE=all
+      - PROC_MAX=8192
+      - NODE_ENV=production
+    depends_on:
+      redis:
+        condition: service_healthy
+    # Resource limits for testing
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'           # Limit to 2 CPU cores
+          memory: 1G            # Limit to 1GB RAM
+        reservations:
+          cpus: '0.5'           # Reserve 0.5 CPU cores
+          memory: 256M          # Reserve 256MB RAM
+    restart: unless-stopped
+
+volumes:
+  redis_data:
+    driver: local

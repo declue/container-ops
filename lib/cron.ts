@@ -4,7 +4,7 @@ import { promises as fs } from "fs";
 import { exec } from "child_process";
 import { promisify } from "util";
 import os from "os";
-import { redis } from "@/lib/redis";
+import { redis, ensureRedisConnection } from "@/lib/redis";
 
 const execAsync = promisify(exec);
 
@@ -279,6 +279,7 @@ async function listProcessSamples(now: number, cpuLimit: number, memLimitBytes: 
 // ------- collect -------
 async function collectMetrics() {
   try {
+    await ensureRedisConnection();
     await ensureSysConf();
     const version = await detectCgroupVersion();
 
@@ -372,8 +373,59 @@ async function collectMetrics() {
     console.log(
       `[cron] ${new Date().toLocaleTimeString()} CPU:${data.cpu_usage_percent}% MEM:${data.memory_usage_percent}% STOR:${data.storage_usage_percent}% procs:${data.processes.length}`
     );
+
+    // Check thresholds and send webhook notifications
+    await checkThresholds(cpuUsagePercent, memPercent, storagePercent);
   } catch (e) {
     console.error("[cron] metrics collection failed:", e);
+  }
+}
+
+// Track last notification timestamps to avoid spam
+const lastNotificationTime: { cpu?: number; memory?: number; storage?: number } = {};
+const NOTIFICATION_COOLDOWN = 5 * 60 * 1000; // 5 minutes cooldown
+
+async function checkThresholds(cpu: number, memory: number, storage: number): Promise<void> {
+  try {
+    const { getAdminSettings } = await import("./admin-settings");
+    const { sendWebhookNotification } = await import("./webhook");
+
+    const settings = await getAdminSettings();
+
+    if (!settings.thresholds.enabled) {
+      return;
+    }
+
+    const now = Date.now();
+
+    // Check CPU threshold
+    if (cpu >= settings.thresholds.cpu) {
+      const lastNotif = lastNotificationTime.cpu || 0;
+      if (now - lastNotif >= NOTIFICATION_COOLDOWN) {
+        await sendWebhookNotification('cpu', cpu, settings.thresholds.cpu);
+        lastNotificationTime.cpu = now;
+      }
+    }
+
+    // Check Memory threshold
+    if (memory >= settings.thresholds.memory) {
+      const lastNotif = lastNotificationTime.memory || 0;
+      if (now - lastNotif >= NOTIFICATION_COOLDOWN) {
+        await sendWebhookNotification('memory', memory, settings.thresholds.memory);
+        lastNotificationTime.memory = now;
+      }
+    }
+
+    // Check Storage threshold
+    if (storage >= settings.thresholds.storage) {
+      const lastNotif = lastNotificationTime.storage || 0;
+      if (now - lastNotif >= NOTIFICATION_COOLDOWN) {
+        await sendWebhookNotification('storage', storage, settings.thresholds.storage);
+        lastNotificationTime.storage = now;
+      }
+    }
+  } catch (error) {
+    console.error("[cron] threshold check failed:", error);
   }
 }
 

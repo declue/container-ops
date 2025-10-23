@@ -16,7 +16,7 @@ import {
   BarChart,
   Bar,
 } from "recharts";
-import { RefreshCw, Download, Cpu, HardDrive, Database, Bug, Moon, Sun } from "lucide-react";
+import { RefreshCw, Download, Cpu, HardDrive, Database, Bug, Moon, Sun, FileText } from "lucide-react";
 
 /* ============================= *
  *            Types
@@ -178,6 +178,32 @@ function toCSV(rows: Array<Record<string, unknown>>): string {
 /* ============================= *
  *           Component
  * ============================= */
+interface VisibilitySettings {
+  showProcessList: boolean;
+  showCpuChart: boolean;
+  showMemoryChart: boolean;
+  showStorageChart: boolean;
+  showTopProcesses: boolean;
+  showDebugInfo: boolean;
+}
+
+type TimeRange = '5m' | '15m' | '30m' | '1h' | '3h' | '6h' | '12h' | '24h' | '2d' | '7d' | '30d' | 'custom';
+
+const TIME_RANGES: { value: TimeRange; label: string; ms?: number }[] = [
+  { value: '5m', label: 'Last 5 minutes', ms: 5 * 60 * 1000 },
+  { value: '15m', label: 'Last 15 minutes', ms: 15 * 60 * 1000 },
+  { value: '30m', label: 'Last 30 minutes', ms: 30 * 60 * 1000 },
+  { value: '1h', label: 'Last 1 hour', ms: 60 * 60 * 1000 },
+  { value: '3h', label: 'Last 3 hours', ms: 3 * 60 * 60 * 1000 },
+  { value: '6h', label: 'Last 6 hours', ms: 6 * 60 * 60 * 1000 },
+  { value: '12h', label: 'Last 12 hours', ms: 12 * 60 * 60 * 1000 },
+  { value: '24h', label: 'Last 24 hours', ms: 24 * 60 * 60 * 1000 },
+  { value: '2d', label: 'Last 2 days', ms: 2 * 24 * 60 * 60 * 1000 },
+  { value: '7d', label: 'Last 7 days', ms: 7 * 24 * 60 * 60 * 1000 },
+  { value: '30d', label: 'Last 30 days', ms: 30 * 24 * 60 * 60 * 1000 },
+  { value: 'custom', label: 'Custom range' },
+];
+
 export default function MonitorPage() {
   const [mounted, setMounted] = useState(false); // SSR width guard
   const [isDark, setIsDark] = useState(false);
@@ -189,6 +215,35 @@ export default function MonitorPage() {
   const [uidNameMap, setUidNameMap] = useState<Record<string, string>>({});
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [refreshMs, setRefreshMs] = useState(10_000);
+  const [timeRange, setTimeRange] = useState<TimeRange>('1h');
+  const [customStartTime, setCustomStartTime] = useState<string>('');
+  const [customEndTime, setCustomEndTime] = useState<string>('');
+  const [showCustomInputs, setShowCustomInputs] = useState(false);
+
+  // Log viewer state
+  interface LogEntry {
+    id: string;
+    label: string;
+    lines: string[];
+    error?: string;
+    size: number;
+    mtime: number;
+  }
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [autoScrollLogs, setAutoScrollLogs] = useState(true);
+  const [maxLogLines, setMaxLogLines] = useState(500);
+  const logContainerRef = useRef<HTMLDivElement>(null);
+  const logOffsetsRef = useRef<Map<string, number>>(new Map());
+
+  // Visibility settings
+  const [visibility, setVisibility] = useState<VisibilitySettings>({
+    showProcessList: true,
+    showCpuChart: true,
+    showMemoryChart: true,
+    showStorageChart: true,
+    showTopProcesses: true,
+    showDebugInfo: true,
+  });
 
   // process table state
   const [query, setQuery] = useState("");
@@ -248,6 +303,85 @@ export default function MonitorPage() {
     }
   }
 
+  // Fetch logs
+  async function fetchLogs() {
+    try {
+      // Build offsets query param
+      const offsetsArray = Array.from(logOffsetsRef.current.entries()).map(([id, offset]) => `${id}:${offset}`);
+      const offsetsParam = offsetsArray.length > 0 ? `?offsets=${offsetsArray.join(',')}` : '';
+
+      const res = await fetch(`/api/logs${offsetsParam}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const newLogs = (await res.json()) as LogEntry[];
+
+      // Update logs with new lines
+      setLogs(prevLogs => {
+        // Create a map of existing logs for quick lookup
+        const existingLogsMap = new Map(prevLogs.map(log => [log.id, log]));
+
+        // Update or add logs from API response
+        newLogs.forEach(newLog => {
+          const existingLog = existingLogsMap.get(newLog.id);
+          if (existingLog) {
+            // Append new lines to existing log
+            if (newLog.lines.length > 0) {
+              existingLog.lines = [...existingLog.lines, ...newLog.lines].slice(-maxLogLines);
+            }
+            existingLog.size = newLog.size;
+            existingLog.mtime = newLog.mtime;
+            existingLog.error = newLog.error;
+          } else {
+            // Add new log file
+            existingLogsMap.set(newLog.id, newLog);
+          }
+        });
+
+        return Array.from(existingLogsMap.values());
+      });
+
+      // Update offsets for next fetch
+      newLogs.forEach(log => {
+        logOffsetsRef.current.set(log.id, log.size);
+      });
+
+      // Auto scroll to bottom if enabled
+      if (autoScrollLogs && logContainerRef.current) {
+        setTimeout(() => {
+          if (logContainerRef.current) {
+            logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
+          }
+        }, 100);
+      }
+    } catch (e) {
+      console.error("[Monitor] log fetch failed:", e);
+    }
+  }
+
+  // Load visibility settings and log settings
+  useEffect(() => {
+    async function loadSettings() {
+      try {
+        const res = await fetch("/api/settings");
+        if (res.ok) {
+          const data = await res.json();
+          setVisibility(data);
+
+          // Load maxLogLines from full admin settings
+          const adminRes = await fetch("/api/admin/settings");
+          if (adminRes.ok) {
+            const adminData = await adminRes.json();
+            if (adminData.logs?.maxLines) {
+              setMaxLogLines(adminData.logs.maxLines);
+            }
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load settings:", err);
+      }
+    }
+    loadSettings();
+  }, []);
+
   useEffect(() => {
     fetchMetrics();
   }, []);
@@ -261,7 +395,30 @@ export default function MonitorPage() {
     };
   }, [autoRefresh, refreshMs]);
 
-  const latest = data[data.length - 1];
+  // Fetch logs on mount and set up polling
+  useEffect(() => {
+    fetchLogs();
+    const logTimer = setInterval(fetchLogs, 2000); // Poll every 2 seconds
+    return () => clearInterval(logTimer);
+  }, []); // Empty dependency - only run on mount
+
+  // Filter data based on selected time range
+  const filteredData = useMemo(() => {
+    if (timeRange === 'custom') {
+      // Custom range: filter by start and end time
+      const startTs = customStartTime ? new Date(customStartTime).getTime() : 0;
+      const endTs = customEndTime ? new Date(customEndTime).getTime() : Date.now();
+      return data.filter(p => p.ts >= startTs && p.ts <= endTs);
+    } else {
+      // Preset range: filter by time offset from now
+      const now = Date.now();
+      const timeRangeMs = TIME_RANGES.find(r => r.value === timeRange)?.ms ?? 60 * 60 * 1000;
+      const cutoffTime = now - timeRangeMs;
+      return data.filter(p => p.ts >= cutoffTime);
+    }
+  }, [data, timeRange, customStartTime, customEndTime]);
+
+  const latest = filteredData[filteredData.length - 1];
 
   const cpuPie = useMemo(() => {
     const used = latest?.cpu ?? 0;
@@ -278,18 +435,17 @@ export default function MonitorPage() {
     return [{ name: "Used", value: used }, { name: "Free", value: Math.max(0, 100 - used) }];
   }, [latest]);
 
-  // Insight data with short labels & tooltips
+  // Insight data - Y축에는 PID만, 툴팁에는 전체 COMMAND
   const topCpu = useMemo(() => {
     return procs
       .filter((p) => (p.cpu ?? 0) > 0)
       .sort((a, b) => (b.cpu ?? 0) - (a.cpu ?? 0))
       .slice(0, 10)
       .map((p) => {
-        const shortCmd = (p.command || "").slice(0, 15) + ((p.command || "").length > 15 ? "…" : "");
         return {
           pid: p.pid,
-          name: `${p.pid} ${shortCmd}`,
-          full: p.command || "",
+          name: String(p.pid), // Y축에는 PID만
+          command: p.command || "(unknown)", // 툴팁용 전체 커맨드
           cpu: p.cpu ?? 0,
         };
       });
@@ -301,21 +457,20 @@ export default function MonitorPage() {
       .sort((a, b) => (b.memBytes ?? 0) - (a.memBytes ?? 0))
       .slice(0, 10)
       .map((p) => {
-        const shortCmd = (p.command || "").slice(0, 15) + ((p.command || "").length > 15 ? "…" : "");
         const memPct =
           p.memPct ??
           (caps?.memoryLimitBytes ? ((p.memBytes ?? 0) / (caps.memoryLimitBytes || 1)) * 100 : 0);
         return {
           pid: p.pid,
-          name: `${p.pid} ${shortCmd}`,
-          full: p.command || "",
+          name: String(p.pid), // Y축에는 PID만
+          command: p.command || "(unknown)", // 툴팁용 전체 커맨드
           memPct,
         };
       });
   }, [procs, caps?.memoryLimitBytes]);
 
   function handleDownloadCSV() {
-    const rows = data.map((p) => ({
+    const rows = filteredData.map((p) => ({
       timestamp: new Date(p.ts).toISOString(),
       cpu: p.cpu,
       memory: p.mem,
@@ -326,7 +481,7 @@ export default function MonitorPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `metrics.csv`;
+    a.download = `metrics-${timeRange}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -381,6 +536,43 @@ export default function MonitorPage() {
       ? (latest.cpu * caps.cpuLimit) / 100
       : undefined;
 
+  // Resource history stats (1h, 24h) - based on filtered data
+  const historyStats = useMemo(() => {
+    const now = Date.now();
+    const oneHourAgo = now - 60 * 60 * 1000;
+    const twentyFourHoursAgo = now - 24 * 60 * 60 * 1000;
+
+    const calcStats = (dataPoints: Point[]) => {
+      if (dataPoints.length === 0) return null;
+      const cpuVals = dataPoints.map(p => p.cpu).filter((v): v is number => typeof v === 'number' && isFinite(v));
+      const memVals = dataPoints.map(p => p.mem).filter((v): v is number => typeof v === 'number' && isFinite(v));
+      const storageVals = dataPoints.map(p => p.storage).filter((v): v is number => typeof v === 'number' && isFinite(v));
+
+      const calcMinMaxAvg = (arr: number[]) => {
+        if (arr.length === 0) return { min: undefined, max: undefined, avg: undefined };
+        return {
+          min: Math.min(...arr),
+          max: Math.max(...arr),
+          avg: arr.reduce((a, b) => a + b, 0) / arr.length
+        };
+      };
+
+      return {
+        cpu: calcMinMaxAvg(cpuVals),
+        memory: calcMinMaxAvg(memVals),
+        storage: calcMinMaxAvg(storageVals)
+      };
+    };
+
+    const oneHourData = filteredData.filter(p => p.ts >= oneHourAgo);
+    const twentyFourHourData = filteredData.filter(p => p.ts >= twentyFourHoursAgo);
+
+    return {
+      oneHour: calcStats(oneHourData),
+      twentyFourHour: calcStats(twentyFourHourData)
+    };
+  }, [filteredData]);
+
   function onHeaderClick(key: typeof sortKey) {
     if (sortKey === key) {
       setSortDir((d) => (d === "asc" ? "desc" : "asc"));
@@ -399,124 +591,244 @@ export default function MonitorPage() {
   const brandViolet = "#7c3aed";
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-zinc-50 via-white to-zinc-100 text-zinc-900 dark:from-zinc-950 dark:via-zinc-950 dark:to-black dark:text-zinc-100">
+    <div className="min-h-screen bg-gradient-to-br from-zinc-50 via-white to-zinc-100 text-zinc-900 dark:from-zinc-950 dark:via-zinc-950 dark:to-black dark:text-zinc-100 flex flex-col gap-8">
       {/* Header */}
-      <div className="sticky top-0 z-10 border-b bg-white/85 backdrop-blur-md dark:bg-zinc-900/85 dark:border-zinc-800">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-300 shrink-0">
-              <Cpu className="h-4 w-4" />
+      <div className="sticky top-0 z-10 border-b bg-white/85 backdrop-blur-md dark:bg-zinc-900/85 dark:border-zinc-800 w-full flex justify-center mb-8">
+        <div className="w-full max-w-screen-xl px-8 lg:px-16 py-4">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-300 shrink-0">
+                <Cpu className="h-4 w-4" />
+              </div>
+              <h1 className="text-xl font-semibold tracking-tight truncate">System Monitor</h1>
+              <div className="hidden sm:flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400 ml-2">
+                <span className="rounded-full bg-zinc-100 px-2 py-0.5 dark:bg-zinc-800/80">CPU {caps?.cpuLimit ?? "—"} vCPU</span>
+                <span className="rounded-full bg-zinc-100 px-2 py-0.5 dark:bg-zinc-800/80">RAM {toGB(caps?.memoryLimitBytes)}</span>
+                <span className="rounded-full bg-zinc-100 px-2 py-0.5 dark:bg-zinc-800/80">Storage {toGB(caps?.storageTotalBytes)}</span>
+              </div>
             </div>
-            <h1 className="text-xl font-semibold tracking-tight truncate">System Monitor</h1>
-            <div className="hidden sm:flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400 ml-2">
-              <span className="rounded-full bg-zinc-100 px-2 py-0.5 dark:bg-zinc-800/80">CPU {caps?.cpuLimit ?? "—"} vCPU</span>
-              <span className="rounded-full bg-zinc-100 px-2 py-0.5 dark:bg-zinc-800/80">RAM {toGB(caps?.memoryLimitBytes)}</span>
-              <span className="rounded-full bg-zinc-100 px-2 py-0.5 dark:bg-zinc-800/80">Storage {toGB(caps?.storageTotalBytes)}</span>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setIsDark((v) => !v)}
+                className="rounded-lg border px-2.5 py-1.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 border-zinc-200 dark:border-zinc-700 transition-all active:scale-[0.98]"
+                title="Toggle theme"
+              >
+                {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+              </button>
+              <select
+                className="rounded-lg border px-2 py-1 text-sm border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900"
+                value={refreshMs}
+                onChange={(e) => setRefreshMs(parseInt(e.target.value, 10))}
+                title="Auto-refresh interval"
+              >
+                <option value={5000}>5s</option>
+                <option value={10000}>10s</option>
+                <option value={30000}>30s</option>
+              </select>
+              <button
+                onClick={() => setAutoRefresh((v) => !v)}
+                className={`rounded-lg border px-3 py-1 text-sm transition-all ${
+                  autoRefresh
+                    ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700"
+                    : "hover:bg-zinc-50 dark:hover:bg-zinc-800 border-zinc-200 dark:border-zinc-700"
+                } active:scale-[0.98]`}
+              >
+                Auto {autoRefresh ? "On" : "Off"}
+              </button>
+              <button
+                onClick={fetchMetrics}
+                className="flex items-center gap-1 rounded-lg border px-3 py-1 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 border-zinc-200 dark:border-zinc-700 transition-all active:scale-[0.98]"
+              >
+                <RefreshCw className="h-4 w-4" /> Refresh
+              </button>
+              <button
+                onClick={handleDownloadCSV}
+                className="flex items-center gap-1 rounded-lg border px-3 py-1 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 border-zinc-200 dark:border-zinc-700 transition-all active:scale-[0.98]"
+              >
+                <Download className="h-4 w-4" /> Export
+              </button>
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={() => setIsDark((v) => !v)}
-              className="rounded-lg border px-2.5 py-1.5 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 border-zinc-200 dark:border-zinc-700 transition-all active:scale-[0.98]"
-              title="Toggle theme"
-            >
-              {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </button>
-            <select
-              className="rounded-lg border px-2 py-1 text-sm border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900"
-              value={refreshMs}
-              onChange={(e) => setRefreshMs(parseInt(e.target.value, 10))}
-              title="Auto-refresh interval"
-            >
-              <option value={5000}>5s</option>
-              <option value={10000}>10s</option>
-              <option value={30000}>30s</option>
-            </select>
-            <button
-              onClick={() => setAutoRefresh((v) => !v)}
-              className={`rounded-lg border px-3 py-1 text-sm transition-all ${
-                autoRefresh
-                  ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700"
-                  : "hover:bg-zinc-50 dark:hover:bg-zinc-800 border-zinc-200 dark:border-zinc-700"
-              } active:scale-[0.98]`}
-            >
-              Auto {autoRefresh ? "On" : "Off"}
-            </button>
-            <button
-              onClick={fetchMetrics}
-              className="flex items-center gap-1 rounded-lg border px-3 py-1 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 border-zinc-200 dark:border-zinc-700 transition-all active:scale-[0.98]"
-            >
-              <RefreshCw className="h-4 w-4" /> Refresh
-            </button>
-            <button
-              onClick={handleDownloadCSV}
-              className="flex items-center gap-1 rounded-lg border px-3 py-1 text-sm hover:bg-zinc-50 dark:hover:bg-zinc-800 border-zinc-200 dark:border-zinc-700 transition-all active:scale-[0.98]"
-            >
-              <Download className="h-4 w-4" /> Export
-            </button>
+
+          {/* Time Range Selector & Copyright */}
+          <div className="flex items-start justify-between gap-6">
+            {/* Time Range Selector - Grafana Style */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-medium text-zinc-600 dark:text-zinc-400 uppercase tracking-wide shrink-0">Time Range:</span>
+                <select
+                  value={timeRange}
+                  onChange={(e) => {
+                    const newRange = e.target.value as TimeRange;
+                    setTimeRange(newRange);
+                    setShowCustomInputs(newRange === 'custom');
+                    if (newRange === 'custom' && !customStartTime && !customEndTime) {
+                      // Set default custom range to last 1 hour
+                      const now = new Date();
+                      const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+                      setCustomStartTime(oneHourAgo.toISOString().slice(0, 16));
+                      setCustomEndTime(now.toISOString().slice(0, 16));
+                    }
+                  }}
+                  className="px-3 py-1.5 text-sm font-medium rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+                >
+                  {TIME_RANGES.map((range) => (
+                    <option key={range.value} value={range.value}>
+                      {range.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Custom Date/Time Inputs */}
+              {showCustomInputs && timeRange === 'custom' && (
+                <div className="flex items-center gap-3 pl-24">
+                  <label className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+                    <span className="font-medium">From:</span>
+                    <input
+                      type="datetime-local"
+                      value={customStartTime}
+                      onChange={(e) => setCustomStartTime(e.target.value)}
+                      className="px-3 py-1.5 text-sm rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+                    <span className="font-medium">To:</span>
+                    <input
+                      type="datetime-local"
+                      value={customEndTime}
+                      onChange={(e) => setCustomEndTime(e.target.value)}
+                      className="px-3 py-1.5 text-sm rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+
+            {/* Copyright */}
+            <div className="text-xs text-zinc-500 dark:text-zinc-400 shrink-0 pt-1">
+              © 2025 JHL. All rights reserved.
+            </div>
           </div>
         </div>
       </div>
 
       {/* Content — section 간 세로 간격 강화 */}
-      <div className="mx-auto max-w-7xl px-4 pb-12 pt-6 space-y-10">
-        {/* KPI Row (모바일에서 카드 간 세로 간격 강화) */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-6">
-          <CardKPI
-            icon={<Cpu className="text-emerald-600 dark:text-emerald-400" />}
-            title="CPU Usage"
-            value={
-              typeof latest?.cpu === "number"
-                ? `${latest.cpu.toFixed(1)}%${
-                    typeof caps?.cpuLimit === "number" ? ` (${((latest.cpu * caps.cpuLimit) / 100).toFixed(2)} vCPU)` : ""
-                  }`
-                : "—"
-            }
-            subtitle={typeof caps?.cpuLimit === "number" ? `of ${caps.cpuLimit} vCPU` : undefined}
-          />
-          <CardKPI
-            icon={<HardDrive className="text-sky-600 dark:text-sky-400" />}
-            title="Memory Usage"
-            value={typeof latest?.mem === "number" ? `${latest.mem.toFixed(1)}%` : "—"}
-            subtitle={`${toGB(caps?.memoryUsedBytes)} / ${toGB(caps?.memoryLimitBytes)}`}
-          />
-          <CardKPI
-            icon={<Database className="text-violet-600 dark:text-violet-400" />}
-            title="Storage Usage"
-            value={typeof latest?.storage === "number" ? `${latest.storage.toFixed(1)}%` : "—"}
-            subtitle={`${toGB(caps?.storageUsedBytes)} / ${toGB(caps?.storageTotalBytes)}`}
-          />
-        </div>
+      <div className="w-full flex justify-center mt-8">
+        <div className="w-full max-w-screen-xl px-8 lg:px-16 pb-12">
+        {/* All Cards Grid with consistent spacing */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
 
-        {/* Charts Row */}
-        <div className="grid lg:grid-cols-3 gap-8">
-          <div className="col-span-2 min-w-0 bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 p-5">
-            <h2 className="font-semibold mb-3 text-zinc-700 dark:text-zinc-200">CPU / Memory / Storage Trend</h2>
-            <div className="w-full" style={{ height: 320 }}>
-              {mounted ? (
-                <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={200}>
-                  <LineChart data={data} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
-                    <XAxis dataKey="ts" tickFormatter={formatTime} minTickGap={24} tick={{ fill: axisTick }} />
-                    <YAxis domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fill: axisTick }} />
-                    <Tooltip
-                      labelFormatter={(v) => new Date(v as number).toLocaleString()}
-                      formatter={(v: any) => `${Number(v).toFixed(1)}%`}
-                      contentStyle={{ backgroundColor: tooltipBg, color: tooltipFg, borderColor: tooltipBorder }}
-                    />
-                    <Legend />
-                    <Line type="monotone" dataKey="cpu" name="CPU" stroke={brandTeal} dot={false} strokeWidth={2} isAnimationActive={false} />
-                    <Line type="monotone" dataKey="mem" name="Memory" stroke={brandBlue} dot={false} strokeWidth={2} isAnimationActive={false} />
-                    <Line type="monotone" dataKey="storage" name="Storage" stroke={brandViolet} dot={false} strokeWidth={2} isAnimationActive={false} />
-                  </LineChart>
-                </ResponsiveContainer>
-              ) : null}
-            </div>
+          {/* KPI Row - Full Width */}
+          <div className="lg:col-span-12 grid grid-cols-1 md:grid-cols-3 gap-8">
+            <CardKPI
+              icon={<Cpu className="text-emerald-600 dark:text-emerald-400" />}
+              title="CPU Usage"
+              value={
+                typeof latest?.cpu === "number"
+                  ? `${latest.cpu.toFixed(1)}%${
+                      typeof caps?.cpuLimit === "number" ? ` (${((latest.cpu * caps.cpuLimit) / 100).toFixed(2)} vCPU)` : ""
+                    }`
+                  : "—"
+              }
+              subtitle={typeof caps?.cpuLimit === "number" ? `of ${caps.cpuLimit} vCPU` : undefined}
+            />
+            <CardKPI
+              icon={<HardDrive className="text-sky-600 dark:text-sky-400" />}
+              title="Memory Usage"
+              value={typeof latest?.mem === "number" ? `${latest.mem.toFixed(1)}%` : "—"}
+              subtitle={`${toGB(caps?.memoryUsedBytes)} / ${toGB(caps?.memoryLimitBytes)}`}
+            />
+            <CardKPI
+              icon={<Database className="text-violet-600 dark:text-violet-400" />}
+              title="Storage Usage"
+              value={typeof latest?.storage === "number" ? `${latest.storage.toFixed(1)}%` : "—"}
+              subtitle={`${toGB(caps?.storageUsedBytes)} / ${toGB(caps?.storageTotalBytes)}`}
+            />
           </div>
 
-          <div className="min-w-0 bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 p-5">
-            <h2 className="font-semibold mb-3 text-zinc-700 dark:text-zinc-200">Usage Breakdown</h2>
-            <div className="grid grid-cols-1 gap-4">
+          {/* Charts Row - Line Chart + Resource History Summary */}
+          {(visibility.showCpuChart || visibility.showMemoryChart || visibility.showStorageChart) && (
+          <div className="lg:col-span-8 flex flex-col gap-8">
+            {/* Line Chart */}
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden">
+              <div className="bg-gradient-to-r from-emerald-50 to-cyan-50 dark:from-emerald-950/30 dark:to-cyan-950/30 px-8 py-5 border-b border-emerald-100/50 dark:border-emerald-900/50">
+                <h2 className="font-semibold text-zinc-800 dark:text-zinc-100">CPU / Memory / Storage Trend</h2>
+              </div>
+              <div className="p-8">
+              <div className="w-full" style={{ height: 320 }}>
+                {mounted ? (
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0} debounce={200}>
+                    <LineChart data={filteredData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
+                      <XAxis dataKey="ts" tickFormatter={formatTime} minTickGap={24} tick={{ fill: axisTick }} />
+                      <YAxis domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fill: axisTick }} />
+                      <Tooltip
+                        labelFormatter={(v) => new Date(v as number).toLocaleString()}
+                        formatter={(v: any) => `${Number(v).toFixed(1)}%`}
+                        contentStyle={{ backgroundColor: tooltipBg, color: tooltipFg, borderColor: tooltipBorder }}
+                      />
+                      <Legend />
+                      <Line type="monotone" dataKey="cpu" name="CPU" stroke={brandTeal} dot={false} strokeWidth={2} isAnimationActive={false} connectNulls={false} />
+                      <Line type="monotone" dataKey="mem" name="Memory" stroke={brandBlue} dot={false} strokeWidth={2} isAnimationActive={false} connectNulls={false} />
+                      <Line type="monotone" dataKey="storage" name="Storage" stroke={brandViolet} dot={false} strokeWidth={2} isAnimationActive={false} connectNulls={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : null}
+              </div>
+              </div>
+            </div>
+
+            {/* Resource History Summary - fills remaining space */}
+            <div className="flex-1 bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden flex flex-col">
+              <div className="bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 px-8 py-5 border-b border-blue-100/50 dark:border-blue-900/50">
+                <h2 className="font-semibold text-zinc-800 dark:text-zinc-100">Resource History Summary</h2>
+              </div>
+              <div className="p-8 flex-1 flex items-center justify-center">
+                <div className="w-full grid grid-cols-1 md:grid-cols-2 gap-10">
+                  {/* 1 Hour Stats */}
+                  <div className="space-y-4">
+                    <div className="text-sm uppercase text-zinc-600 dark:text-zinc-300 font-semibold tracking-wide border-b border-zinc-200 dark:border-zinc-700 pb-2">Last 1 Hour</div>
+                    {historyStats.oneHour ? (
+                      <div className="space-y-3">
+                        <StatRow label="CPU" color={brandTeal} stats={historyStats.oneHour.cpu} />
+                        <StatRow label="Memory" color={brandBlue} stats={historyStats.oneHour.memory} />
+                        <StatRow label="Storage" color={brandViolet} stats={historyStats.oneHour.storage} />
+                      </div>
+                    ) : (
+                      <div className="text-sm text-zinc-400 dark:text-zinc-500">No data available</div>
+                    )}
+                  </div>
+
+                  {/* 24 Hours Stats */}
+                  <div className="space-y-4">
+                    <div className="text-sm uppercase text-zinc-600 dark:text-zinc-300 font-semibold tracking-wide border-b border-zinc-200 dark:border-zinc-700 pb-2">Last 24 Hours</div>
+                    {historyStats.twentyFourHour ? (
+                      <div className="space-y-3">
+                        <StatRow label="CPU" color={brandTeal} stats={historyStats.twentyFourHour.cpu} />
+                        <StatRow label="Memory" color={brandBlue} stats={historyStats.twentyFourHour.memory} />
+                        <StatRow label="Storage" color={brandViolet} stats={historyStats.twentyFourHour.storage} />
+                      </div>
+                    ) : (
+                      <div className="text-sm text-zinc-400 dark:text-zinc-500">No data available</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          )}
+
+          {/* Charts Row - Usage Breakdown */}
+          {(visibility.showCpuChart || visibility.showMemoryChart || visibility.showStorageChart) && (
+          <div className="lg:col-span-4">
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden">
+              <div className="bg-gradient-to-r from-violet-50 to-purple-50 dark:from-violet-950/30 dark:to-purple-950/30 px-8 py-5 border-b border-violet-100/50 dark:border-violet-900/50">
+                <h2 className="font-semibold text-zinc-800 dark:text-zinc-100">Usage Breakdown</h2>
+              </div>
+              <div className="p-8">
+              <div className="grid grid-cols-1 gap-8">
+              {visibility.showCpuChart && (
               <PieBlock title="CPU" color={brandTeal} data={cpuPie} height={120} axisTick={axisTick}
                 footer={
                   typeof latest?.cpu === "number" && typeof caps?.cpuLimit === "number" ? (
@@ -524,6 +836,8 @@ export default function MonitorPage() {
                   ) : null
                 }
               />
+              )}
+              {visibility.showMemoryChart && (
               <PieBlock title="Memory" color={brandBlue} data={memPie} height={120} axisTick={axisTick}
                 footer={
                   typeof latest?.mem === "number" ? (
@@ -531,6 +845,8 @@ export default function MonitorPage() {
                   ) : null
                 }
               />
+              )}
+              {visibility.showStorageChart && (
               <PieBlock title="Storage" color={brandViolet} data={storagePie} height={120} axisTick={axisTick}
                 footer={
                   typeof latest?.storage === "number" ? (
@@ -538,98 +854,196 @@ export default function MonitorPage() {
                   ) : null
                 }
               />
+              )}
+              </div>
+              </div>
             </div>
           </div>
+          )}
+
+          {/* Top CPU Processes */}
+          {visibility.showTopProcesses && (
+          <div className="lg:col-span-6">
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden">
+              <div className="bg-gradient-to-r from-teal-50 to-cyan-50 dark:from-teal-950/30 dark:to-cyan-950/30 px-8 py-5 border-b border-teal-100/50 dark:border-teal-900/50">
+                <h2 className="font-semibold text-zinc-800 dark:text-zinc-100">Top CPU Processes</h2>
+              </div>
+              <div className="p-8">
+              <div className="w-full" style={{ height: 300 }}>
+                {mounted ? (
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+                    <BarChart data={topCpu} layout="vertical" margin={{ left: 10, right: 20 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
+                      <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fill: axisTick }} />
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        width={60}
+                        tick={{ fill: axisTick, fontSize: 12 }}
+                      />
+                      <Tooltip
+                        formatter={(v: any) => [`${Number(v).toFixed(1)}%`, "CPU"]}
+                        labelFormatter={(label: any, payload: any) => {
+                          if (payload && payload[0]) {
+                            const data = payload[0].payload;
+                            return `PID ${data.pid}: ${data.command}`;
+                          }
+                          return label;
+                        }}
+                        contentStyle={{ backgroundColor: tooltipBg, color: tooltipFg, borderColor: tooltipBorder }}
+                      />
+                      <Bar dataKey="cpu" name="CPU" fill={brandTeal} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : null}
+              </div>
+              </div>
+            </div>
+          </div>
+          )}
+
+          {/* Top Memory Processes */}
+          {visibility.showTopProcesses && (
+          <div className="lg:col-span-6">
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden">
+              <div className="bg-gradient-to-r from-sky-50 to-blue-50 dark:from-sky-950/30 dark:to-blue-950/30 px-8 py-5 border-b border-sky-100/50 dark:border-sky-900/50">
+                <h2 className="font-semibold text-zinc-800 dark:text-zinc-100">Top Memory Processes</h2>
+              </div>
+              <div className="p-8">
+              <div className="w-full" style={{ height: 300 }}>
+                {mounted ? (
+                  <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+                    <BarChart data={topMem} layout="vertical" margin={{ left: 10, right: 20 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
+                      <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fill: axisTick }} />
+                      <YAxis
+                        type="category"
+                        dataKey="name"
+                        width={60}
+                        tick={{ fill: axisTick, fontSize: 12 }}
+                      />
+                      <Tooltip
+                        formatter={(v: any) => [`${Number(v).toFixed(1)}%`, "Memory"]}
+                        labelFormatter={(label: any, payload: any) => {
+                          if (payload && payload[0]) {
+                            const data = payload[0].payload;
+                            return `PID ${data.pid}: ${data.command}`;
+                          }
+                          return label;
+                        }}
+                        contentStyle={{ backgroundColor: tooltipBg, color: tooltipFg, borderColor: tooltipBorder }}
+                      />
+                      <Bar dataKey="memPct" name="Memory" fill={brandBlue} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : null}
+              </div>
+              </div>
+            </div>
+          </div>
+          )}
+
+          {/* Process Monitor - Full Width */}
+          {visibility.showProcessList && (
+          <div className="lg:col-span-12">
+            <ProcessMonitor
+              processes={procs}
+              memLimitBytes={caps?.memoryLimitBytes}
+              cpuLimit={caps?.cpuLimit}
+              uidNameMap={uidNameMap}
+              query={query}
+              setQuery={setQuery}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onHeaderClick={onHeaderClick}
+              page={page}
+              setPage={setPage}
+              pageSize={pageSize}
+              setPageSize={setPageSize}
+              total={procRows.total}
+              rows={procRows.rows}
+            />
+          </div>
+          )}
+
+          {/* Log Viewer - Full Width */}
+          {logs.length > 0 && (
+          <div className="lg:col-span-12">
+            <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden">
+              <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-950/30 dark:to-orange-950/30 px-8 py-5 border-b border-amber-100/50 dark:border-amber-900/50 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FileText className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                  <h2 className="font-semibold text-zinc-800 dark:text-zinc-100">Log Viewer</h2>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoScrollLogs}
+                    onChange={(e) => setAutoScrollLogs(e.target.checked)}
+                    className="w-4 h-4 rounded border-zinc-300 text-amber-600 focus:ring-amber-500"
+                  />
+                  Auto-scroll
+                </label>
+              </div>
+              <div className="p-8">
+                <div
+                  ref={logContainerRef}
+                  className="space-y-6 h-[600px] max-h-[600px] overflow-y-auto rounded-lg bg-zinc-50 dark:bg-zinc-950 p-4 border border-zinc-200 dark:border-zinc-800 scrollbar-thin scrollbar-thumb-zinc-300 dark:scrollbar-thumb-zinc-700 scrollbar-track-transparent"
+                >
+                  {logs.map(log => (
+                    <div key={log.id} className="space-y-2">
+                      <div className="flex items-center justify-between sticky top-0 bg-zinc-50 dark:bg-zinc-950 pb-2 border-b border-zinc-200 dark:border-zinc-800">
+                        <span className="font-semibold text-sm text-amber-600 dark:text-amber-400">
+                          {log.label || log.id}
+                        </span>
+                        {log.error && (
+                          <span className="text-xs text-red-600 dark:text-red-400">
+                            Error: {log.error}
+                          </span>
+                        )}
+                      </div>
+                      {log.lines.length > 0 ? (
+                        <div className="font-mono text-xs text-zinc-700 dark:text-zinc-300 space-y-1">
+                          {log.lines.map((line, idx) => (
+                            <div key={idx} className="whitespace-pre-wrap break-all">
+                              {line}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-sm text-zinc-400 dark:text-zinc-500 italic">
+                          {log.error ? 'Unable to read log file' : 'No log data'}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+          )}
+
+          {/* Debug - Full Width */}
+          {visibility.showDebugInfo && (
+          <div className="lg:col-span-12">
+            <details className="bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-8 text-sm text-zinc-700 dark:text-zinc-300">
+              <summary className="cursor-pointer select-none flex items-center gap-2">
+                <Bug className="h-4 w-4" /> Debug (latest raw)
+              </summary>
+              <div className="mt-3 grid sm:grid-cols-3 gap-3">
+                <div><span className="text-zinc-500 dark:text-zinc-400">CPU limit:</span> {caps?.cpuLimit ?? "—"} vCPU</div>
+                <div><span className="text-zinc-500 dark:text-zinc-400">RAM limit:</span> {toGB(caps?.memoryLimitBytes)}</div>
+                <div><span className="text-zinc-500 dark:text-zinc-400">Storage total:</span> {toGB(caps?.storageTotalBytes)}</div>
+              </div>
+              <pre className="mt-3 overflow-auto rounded-lg bg-white dark:bg-zinc-950 p-3 border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200">
+                {JSON.stringify(latestRaw, null, 2)}
+              </pre>
+            </details>
+          </div>
+          )}
+
         </div>
-
-        {/* Insight Row — 1:1 equal width */}
-        <div className="grid lg:grid-cols-2 gap-8">
-          <div className="min-w-0 bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 p-5">
-            <h2 className="font-semibold mb-3 text-zinc-700 dark:text-zinc-200">Top CPU Processes</h2>
-            <div className="w-full" style={{ height: 300 }}>
-              {mounted ? (
-                <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-                  <BarChart data={topCpu} layout="vertical" margin={{ left: 100, right: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
-                    <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fill: axisTick }} />
-                    <YAxis
-                      type="category"
-                      dataKey="name"
-                      width={260}
-                      tick={{ fill: axisTick }}
-                      tickFormatter={(v: string) => v}
-                    />
-                    <Tooltip
-                      formatter={(v: any, _n: string, p: any) => [`${Number(v).toFixed(1)}%`, p?.payload?.full || "Command"]}
-                      contentStyle={{ backgroundColor: tooltipBg, color: tooltipFg, borderColor: tooltipBorder }}
-                    />
-                    <Bar dataKey="cpu" name="CPU" fill={brandTeal} />
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="min-w-0 bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 p-5">
-            <h2 className="font-semibold mb-3 text-zinc-700 dark:text-zinc-200">Top Memory Processes</h2>
-            <div className="w-full" style={{ height: 300 }}>
-              {mounted ? (
-                <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-                  <BarChart data={topMem} layout="vertical" margin={{ left: 100, right: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
-                    <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} tick={{ fill: axisTick }} />
-                    <YAxis
-                      type="category"
-                      dataKey="name"
-                      width={260}
-                      tick={{ fill: axisTick }}
-                      tickFormatter={(v: string) => v}
-                    />
-                    <Tooltip
-                      formatter={(v: any, _n: string, p: any) => [`${Number(v).toFixed(1)}%`, p?.payload?.full || "Command"]}
-                      contentStyle={{ backgroundColor: tooltipBg, color: tooltipFg, borderColor: tooltipBorder }}
-                    />
-                    <Bar dataKey="memPct" name="Memory" fill={brandBlue} />
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : null}
-            </div>
-          </div>
         </div>
-
-        {/* Process Monitor */}
-        <ProcessMonitor
-          processes={procs}
-          memLimitBytes={caps?.memoryLimitBytes}
-          cpuLimit={caps?.cpuLimit}
-          uidNameMap={uidNameMap}
-          query={query}
-          setQuery={setQuery}
-          sortKey={sortKey}
-          sortDir={sortDir}
-          onHeaderClick={onHeaderClick}
-          page={page}
-          setPage={setPage}
-          pageSize={pageSize}
-          setPageSize={setPageSize}
-          total={procRows.total}
-          rows={procRows.rows}
-        />
-
-        {/* Debug */}
-        <details className="bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 text-sm text-zinc-700 dark:text-zinc-300">
-          <summary className="cursor-pointer select-none flex items-center gap-2">
-            <Bug className="h-4 w-4" /> Debug (latest raw)
-          </summary>
-          <div className="mt-3 grid sm:grid-cols-3 gap-3">
-            <div><span className="text-zinc-500 dark:text-zinc-400">CPU limit:</span> {caps?.cpuLimit ?? "—"} vCPU</div>
-            <div><span className="text-zinc-500 dark:text-zinc-400">RAM limit:</span> {toGB(caps?.memoryLimitBytes)}</div>
-            <div><span className="text-zinc-500 dark:text-zinc-400">Storage total:</span> {toGB(caps?.storageTotalBytes)}</div>
-          </div>
-          <pre className="mt-3 overflow-auto rounded-lg bg-white dark:bg-zinc-950 p-3 border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-800 dark:text-zinc-200">
-            {JSON.stringify(latestRaw, null, 2)}
-          </pre>
-        </details>
       </div>
     </div>
   );
@@ -665,7 +1079,7 @@ function ProcessMonitor({
   sortDir: "asc" | "desc";
   onHeaderClick: (key: "cpu" | "mem" | "pid" | "uid" | "ppid") => void;
   page: number;
-  setPage: (n: number) => void;
+  setPage: React.Dispatch<React.SetStateAction<number>>;
   pageSize: number;
   setPageSize: (n: number) => void;
   total: number;
@@ -687,9 +1101,10 @@ function ProcessMonitor({
   );
 
   return (
-    <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 p-5">
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 mb-4">
-        <h2 className="font-semibold text-zinc-700 dark:text-zinc-200">Processes ({total.toLocaleString()})</h2>
+    <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-sm hover:shadow-md transition-shadow dark:shadow-none ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 overflow-hidden">
+      <div className="bg-gradient-to-r from-slate-50 to-zinc-50 dark:from-slate-950/30 dark:to-zinc-950/30 px-8 py-5 border-b border-slate-100/50 dark:border-slate-900/50">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+          <h2 className="font-semibold text-zinc-800 dark:text-zinc-100">Processes ({total.toLocaleString()})</h2>
         <div className="flex items-center gap-2 w-full md:w-auto">
           <input
             value={query}
@@ -733,8 +1148,10 @@ function ProcessMonitor({
             </button>
           </div>
         </div>
+        </div>
       </div>
 
+      <div className="p-8">
       {/* table-fixed: COMMAND이 길어도 다른 컬럼 폭이 흔들리지 않음 */}
       <div className="overflow-auto rounded-xl border border-zinc-200 dark:border-zinc-800">
         <table className="min-w-full text-sm table-fixed">
@@ -745,7 +1162,7 @@ function ProcessMonitor({
             <col className="w-52" />
             <col className="w-60" />
             <col className="w-32" />
-            <col /> {/* COMMAND: 남은 공간 모두 */}
+            <col />
           </colgroup>
           <thead className="bg-zinc-50 dark:bg-zinc-900/50 text-left text-xs uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
             <tr>
@@ -811,6 +1228,7 @@ function ProcessMonitor({
       <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
         Showing {rows.length.toLocaleString()} of {total.toLocaleString()} processes (normalized to container limits).
       </p>
+      </div>
     </div>
   );
 }
@@ -831,15 +1249,15 @@ function CardKPI({
   icon?: React.ReactNode;
 }) {
   return (
-    <div className="min-w-0 bg-white dark:bg-zinc-900 rounded-2xl shadow-sm ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 p-4 transition-all hover:shadow-md hover:-translate-y-0.5">
+    <div className="min-w-0 bg-white dark:bg-zinc-900 rounded-2xl shadow-sm ring-1 ring-zinc-200/70 dark:ring-zinc-700/60 p-8 transition-all hover:shadow-md hover:-translate-y-0.5">
       <div className="flex items-center gap-2 text-xs uppercase text-zinc-500 dark:text-zinc-400 tracking-wide">
         <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-zinc-100 dark:bg-zinc-800">
           {icon}
         </span>
         <span className="truncate">{title}</span>
       </div>
-      <div className="mt-1 text-2xl font-semibold text-zinc-900 dark:text-zinc-100 truncate">{value}</div>
-      {subtitle && <div className="mt-1 text-xs text-zinc-400 dark:text-zinc-500 truncate">{subtitle}</div>}
+      <div className="mt-3 text-2xl font-semibold text-zinc-900 dark:text-zinc-100 truncate">{value}</div>
+      {subtitle && <div className="mt-2 text-xs text-zinc-400 dark:text-zinc-500 truncate">{subtitle}</div>}
     </div>
   );
 }
@@ -921,7 +1339,7 @@ function PieBlock({
   );
 }
 
-function InlineStat({ label, value }: { label: string; value: strin}) {
+function InlineStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="inline-flex items-center gap-2 px-2 py-1 rounded-md bg-zinc-100 dark:bg-zinc-800 text-xs">
       <span className="text-zinc-500 dark:text-zinc-400">{label}:</span>
@@ -933,7 +1351,45 @@ function InlineStat({ label, value }: { label: string; value: strin}) {
 function SortMark({ active, dir }: { active: boolean; dir: "asc" | "desc" }) {
   if (!active) return <span className="text-zinc-400 dark:text-zinc-500">↕</span>;
   return (
-    <span className="text-zinc-900 dark:text-zinc-100">{dir === "as ? "▲" : "▼"}</span>
+    <span className="text-zinc-900 dark:text-zinc-100">{dir === "asc" ? "▲" : "▼"}</span>
+  );
+}
+
+function StatRow({
+  label,
+  color,
+  stats
+}: {
+  label: string;
+  color: string;
+  stats: { min?: number; max?: number; avg?: number }
+}) {
+  const formatVal = (v?: number) =>
+    typeof v === 'number' && isFinite(v) ? `${v.toFixed(1)}%` : '—';
+
+  return (
+    <div className="flex items-center gap-2">
+      <div
+        className="w-1 h-6 rounded-full shrink-0"
+        style={{ backgroundColor: color }}
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-xs font-medium text-zinc-600 dark:text-zinc-400 mb-0.5">
+          {label}
+        </div>
+        <div className="flex items-center gap-3 text-xs text-zinc-700 dark:text-zinc-300">
+          <span className="tabular-nums">
+            <span className="text-zinc-500 dark:text-zinc-500">Min</span> {formatVal(stats.min)}
+          </span>
+          <span className="tabular-nums">
+            <span className="text-zinc-500 dark:text-zinc-500">Avg</span> {formatVal(stats.avg)}
+          </span>
+          <span className="tabular-nums">
+            <span className="text-zinc-500 dark:text-zinc-500">Max</span> {formatVal(stats.max)}
+          </span>
+        </div>
+      </div>
+    </div>
   );
 }
 
