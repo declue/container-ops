@@ -601,7 +601,7 @@ export default function AdminPage() {
                     if (!settings) return;
                     const newFiles = [...(settings.logs?.files || [])];
                     newFiles[index].enabled = e.target.checked;
-                    setSettings({ ...settings, logs: { files: newFiles } });
+                    setSettings({ ...settings, logs: { files: newFiles, maxLines: settings.logs?.maxLines || 500 } });
                   }}
                   className="w-5 h-5 rounded border-zinc-300 text-amber-600 focus:ring-amber-500"
                 />
@@ -613,7 +613,7 @@ export default function AdminPage() {
                       if (!settings) return;
                       const newFiles = [...(settings.logs?.files || [])];
                       newFiles[index].label = e.target.value;
-                      setSettings({ ...settings, logs: { files: newFiles } });
+                      setSettings({ ...settings, logs: { files: newFiles, maxLines: settings.logs?.maxLines || 500 } });
                     }}
                     placeholder="Label (e.g., Application Log)"
                     className="px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm"
@@ -625,7 +625,7 @@ export default function AdminPage() {
                       if (!settings) return;
                       const newFiles = [...(settings.logs?.files || [])];
                       newFiles[index].path = e.target.value;
-                      setSettings({ ...settings, logs: { files: newFiles } });
+                      setSettings({ ...settings, logs: { files: newFiles, maxLines: settings.logs?.maxLines || 500 } });
                     }}
                     placeholder="File path (e.g., /var/log/app.log)"
                     className="px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-amber-500 text-sm"
@@ -635,7 +635,7 @@ export default function AdminPage() {
                   onClick={() => {
                     if (!settings) return;
                     const newFiles = (settings.logs?.files || []).filter((_, i) => i !== index);
-                    setSettings({ ...settings, logs: { files: newFiles } });
+                    setSettings({ ...settings, logs: { files: newFiles, maxLines: settings.logs?.maxLines || 500 } });
                   }}
                   className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 transition-colors"
                   title="Remove log file"
@@ -657,7 +657,7 @@ export default function AdminPage() {
                 const currentFiles = settings.logs?.files || [];
                 setSettings({
                   ...settings,
-                  logs: { files: [...currentFiles, newFile] },
+                  logs: { files: [...currentFiles, newFile], maxLines: settings.logs?.maxLines || 500 },
                 });
               }}
               className="flex items-center gap-2 px-4 py-2 rounded-lg border-2 border-dashed border-zinc-300 dark:border-zinc-700 hover:border-amber-500 dark:hover:border-amber-500 hover:bg-amber-50 dark:hover:bg-amber-900/10 text-zinc-600 dark:text-zinc-400 hover:text-amber-600 dark:hover:text-amber-400 transition-colors w-full justify-center"
