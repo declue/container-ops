@@ -286,7 +286,7 @@ async function collectMetrics() {
     // Get memory read mode from settings
     const { getAdminSettings } = await import("./admin-settings");
     const settings = await getAdminSettings();
-    const memoryReadMode = settings.collection.memoryReadMode || 'auto';
+    const memoryReadMode = settings.collection?.memoryReadMode || 'auto';
 
     // Memory
     let memLimit = 0;

@@ -1325,11 +1325,22 @@ function PieBlock({
               cy="50%"
               innerRadius={28}
               outerRadius={50}
-              label={(e) => `${e.name} ${e.value.toFixed(0)}%`}
             >
               <Cell fill={color} />
               <Cell fill="#E5E7EB" />
             </Pie>
+            <Legend
+              verticalAlign="bottom"
+              height={36}
+              formatter={(value, entry: any) => {
+                const percentage = entry.payload?.value ?? 0;
+                return `${value}: ${percentage.toFixed(1)}%`;
+              }}
+              wrapperStyle={{
+                fontSize: '12px',
+                paddingTop: '8px'
+              }}
+            />
           </PieChart>
         </ResponsiveContainer>
       </div>
